@@ -1,0 +1,558 @@
+
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <meta charset="UTF-8"/>
+        <title>kepler.gl embedded map</title>
+
+        <!--Uber Font-->
+        <link rel="stylesheet" href="https://d1a3f4spazzrp4.cloudfront.net/kepler.gl/uber-fonts/4.0.0/superfine.css">
+
+        <!--Kepler css-->
+        <link href="https://unpkg.com/kepler.gl@3.3.0-alpha.18/umd/keplergl.min.css" rel="stylesheet">
+
+        <!--MapBox css-->
+        <link href="https://api.tiles.mapbox.com/mapbox-gl-js/v1.1.1/mapbox-gl.css" rel="stylesheet">
+        <link href="https://unpkg.com/maplibre-gl@^3/dist/maplibre-gl.css" rel="stylesheet">
+
+        <!-— facebook open graph tags -->
+        <meta property="og:url" content="http://kepler.gl/" />
+        <meta property="og:title" content="Large-scale WebGL-powered Geospatial Data Visualization Tool" />
+        <meta property="og:description" content="Kepler.gl is a powerful web-based geospatial data analysis tool. Built on a high performance rendering engine and designed for large-scale data sets." />
+        <meta property="og:site_name" content="kepler.gl" />
+        <meta property="og:image" content="https://d1a3f4spazzrp4.cloudfront.net/kepler.gl/kepler.gl-meta-tag.png" />
+        <meta property="og:image:type" content="image/png" />
+        <meta property="og:image:width" content="800" />
+        <meta property="og:image:height" content="800" />
+
+        <!-— twitter card tags -->
+        <meta name="twitter:card" content="summary_large_image">
+        <meta name="twitter:site" content="@openjsf">
+        <meta name="twitter:creator" content="@openjsf">
+        <meta name="twitter:title" content="Large-scale WebGL-powered Geospatial Data Visualization Tool">
+        <meta name="twitter:description" content="Kepler.gl is a powerful web-based geospatial data analysis tool. Built on a high performance rendering engine and designed for large-scale data sets.">
+        <meta name="twitter:image" content="https://d1a3f4spazzrp4.cloudfront.net/kepler.gl/kepler.gl-meta-tag.png" />
+
+        <!--
+          Load React/Redux and the other UMD peer dependencies as ES modules.
+          React >= 19 no longer ships UMD builds, so we pull everything from an
+          ESM CDN (esm.sh) and re-expose them on window as the globals that the
+          kepler.gl UMD bundle (and the inline scripts below) expect.
+
+          IMPORTANT: this file must keep working as a standalone file, i.e. opened
+          directly from disk via the file:// protocol. Native ES module scripts
+          are always fetched with CORS semantics and a file:// document has an
+          opaque (null) origin, so the browser refuses to load native modules or
+          import maps locally. To keep the standalone-file behaviour we run
+          es-module-shims in "shim mode" (importmap-shim / module-shim tags): it
+          is a classic script (loads fine from file://) that resolves the import
+          map and executes the modules as blob: URLs, sidestepping that
+          restriction. The import map pins a single React instance and uses
+          external= so react-redux / styled-components reuse it (otherwise React
+          hooks break).
+        -->
+        <script>
+          // Trigger es-module-shims "shim mode" so it always parses the
+          // importmap-shim / module-shim tags below instead of deferring to the
+          // native loader (which fails under file://).
+          window.esmsInitOptions = {shimMode: true};
+        </script>
+        <script>
+          // Replace the loading overlay with an error message.
+          // Safe to call at any time — once React has mounted and removed
+          // #kepler-load-screen this becomes a no-op.
+          window._keplerShowLoadError = function(msg) {
+            var loadScreen = document.getElementById('kepler-load-screen');
+            if (!loadScreen) return;
+            var spinner = loadScreen.querySelector('.kepler-spinner');
+            var label = loadScreen.querySelector('.kepler-load-label');
+            if (spinner) spinner.style.display = 'none';
+            if (label) label.style.display = 'none';
+            var errEl = document.createElement('div');
+            errEl.className = 'kepler-load-error';
+            errEl.textContent = msg || 'Failed to load the map. Check your internet connection and reload the page.';
+            loadScreen.appendChild(errEl);
+          };
+          // Catch unhandled promise rejections (e.g. ES module imports failing
+          // inside the module-shim script before loadScript is ever called).
+          window.addEventListener('unhandledrejection', function(event) {
+            console.error('kepler.gl: unhandled rejection during map load', event.reason);
+            window._keplerShowLoadError('Failed to load the map. Check your internet connection and reload the page.');
+          });
+        </script>
+        <script src="https://unpkg.com/es-module-shims@2.8.1/dist/es-module-shims.js" crossorigin="anonymous"></script>
+        
+        <script type="importmap-shim">
+          {
+            "imports": {
+              "react": "https://esm.sh/react@19.1.0",
+              "react/jsx-runtime": "https://esm.sh/react@19.1.0/jsx-runtime",
+              "react-dom": "https://esm.sh/react-dom@19.1.0?external=react",
+              "react-dom/client": "https://esm.sh/react-dom@19.1.0/client?external=react",
+              "redux": "https://esm.sh/redux@5.0.1",
+              "react-redux": "https://esm.sh/react-redux@9.3.0?external=react,react-dom,redux",
+              "styled-components": "https://esm.sh/styled-components@6.1.19?external=react,react-dom"
+            }
+          }
+        </script>
+
+        <!--
+          Expose the ES modules as globals for the UMD kepler.gl bundle, then load
+          the kepler.gl UMD script and the app bootstrap script only after those
+          globals are available. The kepler.gl UMD bundle is a classic script
+          (which loads fine from file://), so it is injected dynamically here once
+          the globals are in place to guarantee the correct ordering.
+        -->
+        <script type="module-shim">
+          import * as React from 'react';
+          import * as ReactDOM from 'react-dom';
+          import * as ReactDOMClient from 'react-dom/client';
+          import * as Redux from 'redux';
+          import * as ReactRedux from 'react-redux';
+          import * as StyledComponents from 'styled-components';
+
+          // esm.sh namespaces expose the module's default export under .default.
+          // Normalize so the globals match the shape the React 18 UMD builds had:
+          // - React / Redux / ReactRedux keep their full namespace (named exports).
+          // - ReactDOM merges the classic + client entry so both createPortal and
+          //   createRoot are available (createRoot moved to react-dom/client in v19).
+          // - styled-components' global must be the callable default (styled) with
+          //   its named exports (ThemeProvider, withTheme, css, keyframes, ...)
+          //   attached, since the kepler.gl bundle relies on both.
+          window.React = React.default || React;
+          window.ReactDOM = Object.assign({}, ReactDOM.default || ReactDOM, ReactDOMClient);
+          window.Redux = Redux.default || Redux;
+          window.ReactRedux = ReactRedux.default || ReactRedux;
+          window.styled = Object.assign(StyledComponents.default, StyledComponents);
+
+          function loadScript(src) {
+            return new Promise(function(resolve, reject) {
+              var script = document.createElement('script');
+              script.src = src;
+              script.crossOrigin = 'anonymous';
+              script.onload = resolve;
+              script.onerror = reject;
+              document.head.appendChild(script);
+            });
+          }
+
+          // Load the kepler.gl UMD bundle after the globals are in place, then run
+          // the app bootstrap scripts (marked as type="text/kepler-bootstrap").
+          loadScript("https://unpkg.com/kepler.gl@3.3.0-alpha.18/umd/keplergl.min.js")
+            .then(function() {
+              var bootstraps = document.querySelectorAll('script[type="text/kepler-bootstrap"]');
+              bootstraps.forEach(function(node) {
+                var script = document.createElement('script');
+                script.text = node.textContent;
+                document.body.appendChild(script);
+              });
+            })
+            .catch(function(error) {
+              console.error('kepler.gl: failed to load UMD bundle', error);
+              window._keplerShowLoadError('Failed to load the map bundle. Check your internet connection and reload the page.');
+            });
+        </script>
+        <style type="text/css">
+          body {margin: 0; padding: 0; overflow: hidden;}
+          #kepler-load-screen {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #29323c;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            z-index: 9999;
+            font-family: ff-clan-web-pro, 'Helvetica Neue', Helvetica, sans-serif;
+            color: #a0a7b4;
+          }
+          #kepler-load-screen .kepler-spinner {
+            width: 48px; height: 48px;
+            border: 4px solid rgba(255,255,255,0.08);
+            border-top-color: #1fbad6;
+            border-radius: 50%;
+            animation: kepler-spin 0.8s linear infinite;
+          }
+          #kepler-load-screen .kepler-load-label {
+            font-size: 13px;
+            letter-spacing: 0.5px;
+          }
+          #kepler-load-screen .kepler-load-error {
+            font-size: 13px;
+            color: #f05e45;
+            max-width: 360px;
+            text-align: center;
+            line-height: 1.5;
+          }
+          @keyframes kepler-spin { to { transform: rotate(360deg); } }
+        </style>
+
+        <!--MapBox token-->
+        <!--
+          SECURITY NOTE: Your Mapbox access token is embedded below in plain text.
+          Anyone with access to this HTML file can see and use this token.
+          Consider using a scoped token with URL restrictions to limit misuse.
+          See: https://docs.mapbox.com/accounts/guides/tokens/#url-restrictions
+        -->
+        <script>
+          /**
+           * Provide your MapBox Token
+           **/
+          window.MAPBOX_TOKEN = "";
+          window.WARNING_MESSAGE = 'No Mapbox token provided. Mapbox basemaps will not be available. To enable them, edit this file and set MAPBOX_TOKEN to your Mapbox access key.';
+        </script>
+      </head>
+      <body>
+        <!-- We will put our React component inside this div. -->
+        <div id="app">
+          <div id="kepler-load-screen">
+            <div class="kepler-spinner"></div>
+            <div class="kepler-load-label">Loading map…</div>
+          </div>
+        </div>
+
+        <!--
+          Load our React component. This script is not executed inline: it is run
+          by the module shim in <head> once the kepler.gl UMD bundle (and its
+          global peer dependencies) have finished loading.
+        -->
+        <script type="text/kepler-bootstrap">
+          /* Validate Mapbox Token */
+          if ((MAPBOX_TOKEN || '') === '' || MAPBOX_TOKEN === 'PROVIDE_MAPBOX_TOKEN') {
+            console.warn('[kepler.gl]', WARNING_MESSAGE);
+          }
+
+          const branding = {"appName":"kepler.gl","appWebsite":"http://kepler.gl/","appIcon":null,"appNameColor":"#1FBAD6"};
+
+          /** STORE **/
+          // Pre-seed styleType so the correct basemap fetch starts on the very
+          // first render, avoiding a flash of the default dark basemap.
+          // options.config has the versioned envelope shape: { version, config: { mapStyle, ... } }
+          const savedStyleType = "voyager";
+
+          const reducers = (function createReducers(redux, keplerGl, styleType) {
+            return redux.combineReducers({
+              // mount keplerGl reducer
+              keplerGl: keplerGl.keplerGlReducer.initialState({
+                uiState: {
+                  readOnly: true,
+                  currentModal: null,
+                  exportMap: Object.assign({}, keplerGl.INITIAL_UI_STATE.exportMap, branding)
+                },
+                ...(styleType ? {mapStyle: {styleType}} : {})
+              })
+            });
+          }(Redux, KeplerGl, savedStyleType));
+
+          const middleWares = (function createMiddlewares(keplerGl) {
+            return keplerGl.enhanceReduxMiddleware([
+              // Add other middlewares here
+            ]);
+          }(KeplerGl));
+
+          const enhancers = (function craeteEnhancers(redux, middles) {
+            return redux.applyMiddleware(...middles);
+          }(Redux, middleWares));
+
+          const store = (function createStore(redux, enhancers) {
+            return redux.createStore(
+              reducers,
+              {},
+              redux.compose(enhancers)
+            );
+          }(Redux, enhancers));
+          /** END STORE **/
+
+          /** COMPONENTS **/
+          var BrandLogo = (function createBrandLogo(react, branding) {
+            return function BrandLogo(props) {
+              var fixed = Boolean(props && props.fixed);
+              var icon = branding.appIcon
+                ? react.createElement("img", {
+                    src: branding.appIcon,
+                    alt: "",
+                    "aria-hidden": true,
+                    style: {width: "22px", height: "15px", objectFit: "contain"}
+                  })
+                : react.createElement(
+                    "svg",
+                    {width: "22px", height: "15px", viewBox: "0 0 22 15", "aria-hidden": true},
+                    react.createElement(
+                      "g",
+                      {transform: "translate(11, -3) rotate(45.000000)"},
+                      react.createElement("rect", {fill: "#535C6C", x: "0", y: "5", width: "10", height: "10"}),
+                      react.createElement("rect", {fill: "#1FBAD6", x: "5", y: "0", width: "10", height: "10"})
+                    )
+                  );
+
+              return react.createElement(
+                "div",
+                {
+                  className: fixed ? "logo-container" : "side-panel-logo",
+                  style: fixed
+                    ? {position: "fixed", zIndex: 10000, padding: "4px", display: "flex", alignItems: "center"}
+                    : {display: "flex", alignItems: "flex-start"}
+                },
+                react.createElement(
+                  "div",
+                  {style: {marginTop: fixed ? 0 : "3px"}},
+                  icon
+                ),
+                react.createElement(
+                  "div",
+                  {className: "logo__title", style: {marginLeft: "6px"}},
+                  react.createElement(
+                    "a",
+                    {
+                      className: "kepler_gl__logo logo__link",
+                      href: branding.appWebsite,
+                      target: "_blank",
+                      rel: "noopener noreferrer",
+                      style: {
+                        color: branding.appNameColor,
+                        fontFamily: "ff-clan-web-pro, 'Helvetica Neue', Helvetica, sans-serif",
+                        fontSize: "14px",
+                        fontWeight: 600,
+                        letterSpacing: "1.17px",
+                        textDecoration: "none"
+                      }
+                    },
+                    react.createElement("span", {style: {color: branding.appNameColor}}, branding.appName)
+                  ),
+                  !fixed && props && props.version
+                    ? react.createElement(
+                        "div",
+                        {
+                          className: "logo__version",
+                          style: {fontSize: "10px", color: "#a0a7b4", letterSpacing: "0.83px", lineHeight: "14px"}
+                        },
+                        props.version
+                      )
+                    : null
+                )
+              );
+            };
+          }(React, branding));
+
+          /** Custom map control factory to restore export editing and chart display. **/
+          var CustomMapControlFactory = (function createCustomMapControl(react, keplerGl) {
+            var EffectControlFactory = keplerGl.EffectControlFactory;
+            var EffectManagerFactory = keplerGl.EffectManagerFactory;
+            var AnnotationControlFactory = keplerGl.AnnotationControlFactory;
+            var AnnotationManagerFactory = keplerGl.AnnotationManagerFactory;
+            var ChartControlFactory = keplerGl.ChartControlFactory;
+            var ChartManagerFactory = keplerGl.ChartManagerFactory;
+            var MapControlFactory = keplerGl.MapControlFactory;
+
+            if (
+              !EffectControlFactory ||
+              !EffectManagerFactory ||
+              !AnnotationControlFactory ||
+              !AnnotationManagerFactory ||
+              !ChartControlFactory ||
+              !ChartManagerFactory ||
+              !MapControlFactory
+            ) {
+              console.warn('kepler.gl: Export control factories not available, skipping control injection');
+              return null;
+            }
+
+            function ExportMapControlFactory(
+              EffectControl,
+              EffectManager,
+              AnnotationControl,
+              AnnotationManager,
+              ChartControl,
+              ChartManager
+            ) {
+              var args = Array.prototype.slice.call(arguments, 6);
+              var MapControl = MapControlFactory.apply(null, args);
+              var defaultActionComponents = MapControl.defaultActionComponents || [];
+
+              var ExportMapControl = function ExportMapControl(props) {
+                var readOnly = Boolean(props.readOnly);
+                var mapControls = props.mapControls || {};
+                var charts = props.charts || [];
+                var actionComponents = defaultActionComponents.filter(function(ActionComponent) {
+                  return !readOnly || ActionComponent !== AnnotationControl;
+                });
+                if (!readOnly) {
+                  actionComponents = actionComponents.concat([ChartControl, EffectControl]);
+                }
+                var showEffects = !readOnly && Boolean(mapControls.effect && mapControls.effect.active);
+                var showAnnotations = !readOnly && Boolean(mapControls.annotation && mapControls.annotation.active);
+                var showChartPanel = !readOnly && Boolean(mapControls.chart && mapControls.chart.active);
+                var hasPinnedCharts = charts.some(function(chart) { return chart.pinned !== false; });
+                var showCharts = readOnly ? charts.length > 0 : showChartPanel || hasPinnedCharts;
+                var rightPanelVisible = showEffects || showAnnotations || showCharts;
+                return react.createElement(
+                  'div',
+                  {style: {
+                    position: 'absolute',
+                    display: 'flex',
+                    top: (props.top || 0) + 'px',
+                    right: 0,
+                    zIndex: 1,
+                    maxHeight: '100%',
+                    pointerEvents: 'none'
+                  }},
+                  react.createElement(
+                    'div',
+                    {style: {position: 'relative', pointerEvents: 'all'}},
+                    react.createElement(MapControl, Object.assign({}, props, {top: 0, actionComponents: actionComponents}))
+                  ),
+                  rightPanelVisible
+                    ? react.createElement('div', {
+                        style: {
+                          maxHeight: '100%',
+                          overflow: 'hidden',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          pointerEvents: 'all',
+                          marginTop: '10px'
+                        }
+                      },
+                      showAnnotations ? react.createElement(AnnotationManager, null) : null,
+                      showCharts ? react.createElement(ChartManager, {
+                        panelActive: showChartPanel,
+                        isExport: readOnly
+                      }) : null,
+                      showEffects ? react.createElement(EffectManager, null) : null
+                      )
+                    : null
+                );
+              };
+
+              return ExportMapControl;
+            }
+            ExportMapControlFactory.deps = [
+              EffectControlFactory,
+              EffectManagerFactory,
+              AnnotationControlFactory,
+              AnnotationManagerFactory,
+              ChartControlFactory,
+              ChartManagerFactory
+            ].concat(MapControlFactory.deps);
+
+            return [MapControlFactory, ExportMapControlFactory];
+          }(React, KeplerGl));
+
+          var CustomPanelHeaderFactory = (function createCustomPanelHeader(react, keplerGl, BrandLogo) {
+            var PanelHeaderFactory = keplerGl.PanelHeaderFactory;
+            if (!PanelHeaderFactory) {
+              console.warn('kepler.gl: Panel header factory not available, skipping branding injection');
+              return null;
+            }
+
+            function ExportPanelHeaderFactory() {
+              var PanelHeader = PanelHeaderFactory.apply(null, arguments);
+              return function ExportPanelHeader(props) {
+                return react.createElement(
+                  PanelHeader,
+                  Object.assign({}, props, {logoComponent: BrandLogo})
+                );
+              };
+            }
+            ExportPanelHeaderFactory.deps = PanelHeaderFactory.deps;
+            return [PanelHeaderFactory, ExportPanelHeaderFactory];
+          }(React, KeplerGl, BrandLogo));
+
+          var CustomFactories = [CustomMapControlFactory, CustomPanelHeaderFactory].filter(Boolean);
+          var KeplerGlComponent = CustomFactories.length
+            ? KeplerGl.injectComponents(CustomFactories)
+            : KeplerGl.KeplerGl;
+
+          var KeplerElement = (function makeKeplerElement(react, keplerGl, mapboxToken, branding, BrandLogo) {
+            return function App() {
+              var rootElm = react.useRef(null);
+              var _useState = react.useState({
+                width: window.innerWidth,
+                height: window.innerHeight
+              });
+              var windowDimension = _useState[0];
+              var setDimension = _useState[1];
+              react.useEffect(function sideEffect(){
+                function handleResize() {
+                  setDimension({width: window.innerWidth, height: window.innerHeight});
+                };
+                window.addEventListener('resize', handleResize);
+                return function() {window.removeEventListener('resize', handleResize);};
+              }, []);
+              // Remove the loading overlay after the first render is painted.
+              // useEffect fires post-commit, so this is safe under React 19's
+              // concurrent renderer — the map is visible before the overlay goes away.
+              react.useEffect(function removeLoadScreen() {
+                var loadScreen = document.getElementById('kepler-load-screen');
+                if (loadScreen) loadScreen.remove();
+              }, []);
+              return react.createElement(
+                'div',
+                {style: {position: 'absolute', left: 0, width: '100vw', height: '100vh'}},
+                react.createElement(BrandLogo, {fixed: true}),
+                react.createElement(KeplerGlComponent, {
+                  mapboxApiAccessToken: mapboxToken,
+                  id: "map",
+                  width: windowDimension.width,
+                  height: windowDimension.height,
+                  appName: branding.appName,
+                  appWebsite: branding.appWebsite
+                })
+              )
+            }
+          }(React, KeplerGl, MAPBOX_TOKEN, branding, BrandLogo));
+
+          const app = (function createReactReduxProvider(react, reactRedux, KeplerElement) {
+            return react.createElement(
+              reactRedux.Provider,
+              {store},
+              react.createElement(KeplerElement, null)
+            )
+          }(React, ReactRedux, KeplerElement));
+          /** END COMPONENTS **/
+
+          /** Render **/
+          (function render(react, reactDOM, app) {
+            const container = document.getElementById('app');
+            const root = reactDOM.createRoot(container);
+            root.render(app);
+          }(React, ReactDOM, app));
+
+          /**
+           * Customize map.
+           * In the following section you can use the store object to dispatch Kepler.gl actions
+           * to add new data and customize behavior
+           */
+          (function customize(keplerGl, store) {
+            const datasets = [{"version":"v1","data":{"id":"tp0jwc","label":"courses_by_building_actual_enrolled_with_coords.csv","color":[143,47,191],"allData":[["Atkins","11:15 AM",3,150,"BUSN",35.30580786,-80.73218387],["Atkins","12:20 PM",1,40,"ENGR",35.30580786,-80.73218387],["Atkins","2:30 PM",3,65,"SOCY, MGMT",35.30580786,-80.73218387],["Atkins","4:00 PM",3,26,"THEA, ENGL",35.30580786,-80.73218387],["Atkins","9:00 AM",3,45,"BUSN",35.30580786,-80.73218387],["Belk Gymnasium","10:00 AM",3,45,"ATRN",35.3053805,-80.73565558],["Belk Gymnasium","10:10 AM",5,168,"UCOL, EXER",35.3053805,-80.73565558],["Belk Gymnasium","11:15 AM",2,133,"EXER",35.3053805,-80.73565558],["Belk Gymnasium","11:30 AM",3,45,"ATRN",35.3053805,-80.73565558],["Belk Gymnasium","12:30 PM",5,47,"ITIS, DSBA",35.3053805,-80.73565558],["Belk Gymnasium","2:30 PM",8,249,"HAHS, ECON, BIOL",35.3053805,-80.73565558],["Belk Gymnasium","4:00 PM",2,72,"KNES, MATH",35.3053805,-80.73565558],["Belk Gymnasium","6:00 AM",2,8,"MSCI",35.3053805,-80.73565558],["Belk Gymnasium","8:30 AM",6,99,"ATRN",35.3053805,-80.73565558],["Belk Gymnasium","9:00 AM",1,25,"EXER",35.3053805,-80.73565558],["Belk Gymnasium","9:05 AM",3,238,"UCOL, EXER",35.3053805,-80.73565558],["Bioinformatics","11:15 AM",3,33,"BINF",35.31267572,-80.74196],["Bioinformatics","12:15 PM",3,12,"BINF",35.31267572,-80.74196],["Bioinformatics","2:30 PM",9,276,"BINF, COSC",35.31267572,-80.74196],["Bioinformatics","4:00 PM",7,124,"PHYS, MEGR, BINF",35.31267572,-80.74196],["Bioinformatics","5:30 PM",2,26,"MEGR",35.31267572,-80.74196],["Cameron Hall","10:10 AM",3,24,"SEGR, EMGT",35.30767428,-80.73120783],["Cameron Hall","11:00 AM",4,96,"PHYS",35.30767428,-80.73120783],["Cameron Hall","11:15 AM",3,73,"MEET, ETEM",35.30767428,-80.73120783],["Cameron Hall","12:20 PM",3,104,"SEGR, FINN",35.30767428,-80.73120783],["Cameron Hall","1:25 PM",10,55,"SEGR, HIST, EMGT, AFRS, AMST",35.30767428,-80.73120783],["Cameron Hall","2:00 PM",4,90,"PHYS",35.30767428,-80.73120783],["Cameron Hall","2:30 PM",3,4,"SEGR, EMGT",35.30767428,-80.73120783],["Cameron Hall","4:00 PM",2,12,"SEGR",35.30767428,-80.73120783],["Cameron Hall","5:00 PM",4,88,"PHYS",35.30767428,-80.73120783],["Cameron Hall","8:00 AM",6,108,"SEGR, PHYS",35.30767428,-80.73120783],["Cameron Hall","9:05 AM",1,89,"ECON",35.30767428,-80.73120783],["College of Health & Human Serv","10:10 AM",36,1047,"SPAN, SOWK, PSYC, FILM, HIST, LEGL, MATH, AFRS, ANTH, CHEM, ITSC, CMET",35.30738864,-80.73331468],["College of Health & Human Serv","10:15 AM",2,43,"EXER",35.30738864,-80.73331468],["College of Health & Human Serv","10:25 AM",2,48,"PHYS",35.30738864,-80.73331468],["College of Health & Human Serv","11:00 AM",2,32,"NURS",35.30738864,-80.73331468],["College of Health & Human Serv","11:15 AM",29,1485,"SPAN, NURS, PSYC, FREN, ENGL, ACCT, AFRS, ITAI, BIOL, CHEM",35.30738864,-80.73331468],["College of Health & Human Serv","12:20 PM",6,195,"AMDM, ITSC",35.30738864,-80.73331468],["College of Health & Human Serv","12:30 PM",1,16,"EXER",35.30738864,-80.73331468],["College of Health & Human Serv","1:00 PM",3,375,"CJUS",35.30738864,-80.73331468],["College of Health & Human Serv","1:25 PM",7,412,"SPOA, HIST, ENGR, ETCE",35.30738864,-80.73331468],["College of Health & Human Serv","2:00 PM",2,32,"NURS",35.30738864,-80.73331468],["College of Health & Human Serv","2:30 PM",30,1249,"NURS, HLTH, SOWK, CHEM, ETCE, ITSC",35.30738864,-80.73331468],["College of Health & Human Serv","2:45 PM",1,8,"EXER",35.30738864,-80.73331468],["College of Health & Human Serv","3:30 PM",1,13,"LEAD",35.30738864,-80.73331468],["College of Health & Human Serv","3:35 PM",1,37,"ENGR",35.30738864,-80.73331468],["College of Health & Human Serv","4:00 PM",9,692,"MEET, MATH, BIOL, ETCE",35.30738864,-80.73331468],["College of Health & Human Serv","5:30 PM",24,961,"ITIS, NUNP, HLTH, SOWK, HCIP, HADM, ANTH, ITSC",35.30738864,-80.73331468],["College of Health & Human Serv","7:00 PM",6,63,"ITCS",35.30738864,-80.73331468],["College of Health & Human Serv","8:00 AM",8,318,"NURS, SOWK, EXER",35.30738864,-80.73331468],["College of Health & Human Serv","8:30 AM",2,26,"SECD",35.30738864,-80.73331468],["College of Health & Human Serv","8:55 AM",2,48,"PHYS",35.30738864,-80.73331468],["College of Health & Human Serv","9:00 AM",1,22,"LANG",35.30738864,-80.73331468],["College of Health & Human Serv","9:05 AM",23,982,"SPAN, PSYC, MATH, ENGR, CHEM, COMM, CMET",35.30738864,-80.73331468],["College of Health & Human Serv","9:30 AM",3,21,"CSLG",35.30738864,-80.73331468],["Colvard","10:10 AM",30,1485,"ITIS, PHIL, STAT, WGST, PSYC, JAPN, LEGL, INFO, AMST, COMM, ITCS, DTSC",35.30487637,-80.73174692],["Colvard","11:00 AM",1,5,"HPSY",35.30487637,-80.73174692],["Colvard","11:15 AM",22,841,"ITIS, PHIL, PSYC, RELS, LEGL, INFO, ARTH, ITCS, CJUS",35.30487637,-80.73174692],["Colvard","12:00 PM",2,12,"OSCI",35.30487637,-80.73174692],["Colvard","12:20 PM",10,240,"PHIL, THEA, LEGL, INFO, ENGL, AAHP",35.30487637,-80.73174692],["Colvard","12:30 PM",6,420,"DTSC",35.30487637,-80.73174692],["Colvard","1:00 PM",1,71,"MATH",35.30487637,-80.73174692],["Colvard","1:25 PM",5,123,"PHIL, WRDS, HCAI",35.30487637,-80.73174692],["Colvard","2:30 PM",23,875,"STAT, PSYC, INFO, MKTG, HHUM, HPSY, ETEM, ENGR, ACCT, COMM, CJUS",35.30487637,-80.73174692],["Colvard","4:00 PM",23,1000,"WRDS, RELS, PSYC, FILM, MATH, ETEM, ENGL, ACCT, CJUS, DTSC",35.30487637,-80.73174692],["Colvard","5:00 PM",2,18,"SPED",35.30487637,-80.73174692],["Colvard","5:30 PM",12,236,"ITIS, OPER, WRDS, COMM, ITSC",35.30487637,-80.73174692],["Colvard","6:00 PM",2,48,"PSYC",35.30487637,-80.73174692],["Colvard","8:00 AM",4,116,"WRDS, PSYC",35.30487637,-80.73174692],["Colvard","9:05 AM",9,408,"STAT, WRDS, PSYC, AMST",35.30487637,-80.73174692],["Cone University Center","10:10 AM",1,40,"ENGR",35.3051493,-80.73319934],["Cone University Center","11:15 AM",1,40,"ENGR",35.3051493,-80.73319934],["Cone University Center","1:25 PM",1,40,"ENGR",35.3051493,-80.73319934],["Cone University Center","2:30 PM",1,40,"ENGR",35.3051493,-80.73319934],["Cone University Center","8:00 AM",1,39,"ENGR",35.3051493,-80.73319934],["Denny","10:10 AM",39,903,"SOCY, STAT, WRDS, HIST, LTAM, GRNT, AMST, ARTA, AAHP, ITSC, CHEM",35.3054017,-80.72982479],["Denny","11:15 AM",18,949,"STAT, WRDS, PSYC, HIST, LTAM, AMST, COMM",35.3054017,-80.72982479],["Denny","12:20 PM",11,766,"WRDS, HIST, LTAM, ECON, COMM",35.3054017,-80.72982479],["Denny","12:30 PM",3,68,"MGMT, MATH",35.3054017,-80.72982479],["Denny","1:00 PM",5,37,"OSCI, STAT, MATH",35.3054017,-80.72982479],["Denny","1:25 PM",10,267,"WRDS, HIST, AMDM, ARTH",35.3054017,-80.72982479],["Denny","2:30 PM",22,734,"SOCY, SPAN, POLS, PSYC, MGMT, MATH, FINN, ANTH, CAPI",35.3054017,-80.72982479],["Denny","4:00 PM",10,359,"WRDS, HIST, MATH, GLST, CJUS",35.3054017,-80.72982479],["Denny","5:30 PM",14,367,"SOCY, HIST, MATH, GEOG, ANTH, ITCS",35.3054017,-80.72982479],["Denny","6:00 PM",3,56,"POLS, LEGL",35.3054017,-80.72982479],["Denny","8:00 AM",5,100,"SOCY, WRDS, GRNT",35.3054017,-80.72982479],["Denny","9:00 AM",2,50,"GRAD",35.3054017,-80.72982479],["Denny","9:05 AM",15,788,"THEA, WRDS, HIST, AMST, ANTH",35.3054017,-80.72982479],["Duke Centennial Hall","10:10 AM",6,195,"MEGR",35.3119377,-80.74118543],["Duke Centennial Hall","11:15 AM",8,263,"MEGR",35.3119377,-80.74118543],["Duke Centennial Hall","12:20 PM",4,174,"MEGR",35.3119377,-80.74118543],["Duke Centennial Hall","1:25 PM",4,123,"MEGR",35.3119377,-80.74118543],["Duke Centennial Hall","2:30 PM",8,470,"MEGR, ENGR, ITSC",35.3119377,-80.74118543],["Duke Centennial Hall","4:00 PM",7,210,"MATH, MEGR, ENGR",35.3119377,-80.74118543],["Duke Centennial Hall","5:30 PM",7,99,"MEGR, ECGR",35.3119377,-80.74118543],["Duke Centennial Hall","7:00 PM",1,10,"MEGR",35.3119377,-80.74118543],["Duke Centennial Hall","8:00 AM",3,61,"MEGR",35.3119377,-80.74118543],["Duke Centennial Hall","9:05 AM",6,253,"MEGR",35.3119377,-80.74118543],["Energy Prod & Infrastructr Ctr","10:00 AM",6,192,"CEGR",35.30894972,-80.74170063],["Energy Prod & Infrastructr Ctr","10:10 AM",24,641,"STAT, MEGR, ECGR, CEGR",35.30894972,-80.74170063],["Energy Prod & Infrastructr Ctr","11:15 AM",16,527,"OPTI, ETME, MEGR, ECGR",35.30894972,-80.74170063],["Energy Prod & Infrastructr Ctr","12:20 PM",11,656,"MEET, MEGR, ECGR, CEGR",35.30894972,-80.74170063],["Energy Prod & Infrastructr Ctr","1:00 PM",2,74,"PHYS",35.30894972,-80.74170063],["Energy Prod & Infrastructr Ctr","1:25 PM",12,255,"MEGR, ECGR, CEGR",35.30894972,-80.74170063],["Energy Prod & Infrastructr Ctr","2:30 PM",40,1043,"SOCY, PHYS, MEGR, ECGR, ENGR, BINF, BIOL, CEGR, COMM",35.30894972,-80.74170063],["Energy Prod & Infrastructr Ctr","4:00 PM",15,301,"ITIS, MEGR, ECGR",35.30894972,-80.74170063],["Energy Prod & Infrastructr Ctr","5:30 PM",24,543,"INES, MEGR, ECGR, ARCH, CEGR",35.30894972,-80.74170063],["Energy Prod & Infrastructr Ctr","8:00 AM",28,502,"MEGR, ECGR, CEGR",35.30894972,-80.74170063],["Energy Prod & Infrastructr Ctr","9:05 AM",5,282,"MATH, MEGR, ECGR",35.30894972,-80.74170063],["Fretwell","10:00 AM",3,35,"MATH, MAED",35.3061396,-80.72900503],["Fretwell","10:10 AM",25,931,"STAT, MDSK, SOCY, PHYS, POLS, HIST, LTAM, MATH, ECON, ENGL, ANTH, ARTH",35.3061396,-80.72900503],["Fretwell","11:15 AM",25,1355,"POLS, FILM, MATH, GLST, HHUM, ENGL, AMST, ANTH, COMM",35.3061396,-80.72900503],["Fretwell","11:30 AM",2,50,"ENGL",35.3061396,-80.72900503],["Fretwell","12:20 PM",10,964,"STAT, SOCY, POLS, MATH, ENGL",35.3061396,-80.72900503],["Fretwell","12:30 PM",3,39,"ANTH",35.3061396,-80.72900503],["Fretwell","1:00 PM",2,34,"FILM, MATH",35.3061396,-80.72900503],["Fretwell","1:25 PM",19,1318,"SOCY, STAT, WGST, HIST, MATH, GLST, ACCT, AMST",35.3061396,-80.72900503],["Fretwell","2:30 PM",41,1065,"SOCY, OPER, UCOL, WGST, POLS, PSYC, FILM, MATH, ENGL, COMM, CJUS",35.3061396,-80.72900503],["Fretwell","2:45 PM",3,24,"ANTH",35.3061396,-80.72900503],["Fretwell","4:00 PM",33,1398,"SOCY, STAT, UCOL, PSYC, ENGL, LTAM, MATH, MAED, AMDM, AMST, ANTH, COMM, ITSC",35.3061396,-80.72900503],["Fretwell","5:30 PM",25,530,"STAT, ENGL, MATH, BUSN, COMM, ITCS, DSBA",35.3061396,-80.72900503],["Fretwell","5:45 PM",2,5,"GRAD",35.3061396,-80.72900503],["Fretwell","6:00 PM",2,14,"SOCY",35.3061396,-80.72900503],["Fretwell","6:30 PM",3,81,"POLS, LEGL",35.3061396,-80.72900503],["Fretwell","8:00 AM",17,762,"STAT, POLS, MATH, ANTH",35.3061396,-80.72900503],["Fretwell","9:05 AM",11,907,"SOCY, STAT, MATH, ENGL, ACCT",35.3061396,-80.72900503],["Fretwell","9:30 AM",6,102,"SOCY, OSCI, PPOL",35.3061396,-80.72900503],["Friday","10:00 AM",4,73,"UCOL, ENTR, MKTG",35.30632823,-80.72998469],["Friday","10:10 AM",11,388,"SOCY, HLTH, MGMT, INFO, MATH, GRNT, HHUM, ECON",35.30632823,-80.72998469],["Friday","10:15 AM",3,150,"CAPI",35.30632823,-80.72998469],["Friday","11:15 AM",11,552,"SOCY, MUSC, HIST, INFO, MATH, ECON, BUSN",35.30632823,-80.72998469],["Friday","11:30 AM",1,38,"MGMT",35.30632823,-80.72998469],["Friday","12:20 PM",16,845,"UCOL, INFO, MATH, ACCT, BPHD, BUSN, BLAW",35.30632823,-80.72998469],["Friday","1:00 PM",4,101,"ELTI, MGMT, INFO",35.30632823,-80.72998469],["Friday","1:25 PM",15,892,"THEA, MATH, ACCT, BUSN, BLAW",35.30632823,-80.72998469],["Friday","1:30 PM",5,63,"STAT, MATH",35.30632823,-80.72998469],["Friday","2:30 PM",26,1037,"OPER, ETME, STAT, MGMT, INFO, MKTG, ECON, ACCT, BUSN",35.30632823,-80.72998469],["Friday","4:00 PM",13,532,"OPER, INFO, MKTG, ENGR, BUSN",35.30632823,-80.72998469],["Friday","5:30 PM",15,297,"ACCT, BPHD, ITCS",35.30632823,-80.72998469],["Friday","6:30 PM",14,295,"POLS, LEGL, MBAD, FINN, AMST, BLAW, CJUS",35.30632823,-80.72998469],["Friday","9:00 AM",6,252,"BUSN",35.30632823,-80.72998469],["Friday","9:05 AM",17,862,"MGMT, INFO, GEOG, MATH, HHUM, AFRS, BPHD, BUSN, CJUS",35.30632823,-80.72998469],["Friday","9:30 AM",1,42,"EDUC",35.30632823,-80.72998469],["Garinger","2:30 PM",3,18,"AFRS",35.30504611,-80.73005559],["Grigg Hall","10:10 AM",10,62,"OPTI, SOWK, PHYS",35.31117454,-80.74199889],["Grigg Hall","2:30 PM",8,156,"OPTI, STAT, MATH, MEGR",35.31117454,-80.74199889],["Grigg Hall","4:00 PM",2,72,"STAT",35.31117454,-80.74199889],["Grigg Hall","7:00 PM",1,11,"MEGR",35.31117454,-80.74199889],["Grigg Hall","8:00 AM",2,30,"PHYS",35.31117454,-80.74199889],["Klein Hall","11:00 AM",4,94,"PHYS",35.30856999,-80.73003348],["Klein Hall","11:15 AM",30,702,"BIOL, CHEM",35.30856999,-80.73003348],["Klein Hall","12:20 PM",3,72,"BIOL",35.30856999,-80.73003348],["Klein Hall","2:00 PM",4,96,"PHYS",35.30856999,-80.73003348],["Klein Hall","2:30 PM",27,624,"BIOL, CHEM",35.30856999,-80.73003348],["Klein Hall","4:00 PM",4,131,"MATH, BIOL",35.30856999,-80.73003348],["Klein Hall","5:00 PM",2,30,"PHYS",35.30856999,-80.73003348],["Klein Hall","5:30 PM",3,72,"BIOL",35.30856999,-80.73003348],["Klein Hall","7:00 PM",2,36,"PHYS",35.30856999,-80.73003348],["Klein Hall","8:00 AM",32,750,"PHYS, MATH, BIOL, CHEM",35.30856999,-80.73003348],["Klein Hall","9:05 AM",3,72,"BIOL",35.30856999,-80.73003348],["Macy","10:10 AM",12,230,"WRDS, RELS, IDST, GLST, ARTG",35.3056895,-80.73040861],["Macy","11:15 AM",5,149,"WRDS, CTCM",35.3056895,-80.73040861],["Macy","12:20 PM",13,268,"WRDS, ARTG, CJUS",35.3056895,-80.73040861],["Macy","1:25 PM",5,119,"WRDS, AMST",35.3056895,-80.73040861],["Macy","2:30 PM",17,217,"THEA, WRDS, LEGL, ARTG, CJUS",35.3056895,-80.73040861],["Macy","4:00 PM",3,39,"WRDS, HIST",35.3056895,-80.73040861],["Macy","5:30 PM",6,96,"ARTM, ARTG",35.3056895,-80.73040861],["Macy","6:30 PM",2,10,"HIST, LTAM",35.3056895,-80.73040861],["Macy","8:00 AM",4,86,"WRDS",35.3056895,-80.73040861],["Macy","9:05 AM",7,185,"WRDS, CJUS",35.3056895,-80.73040861],["McEniry","10:00 AM",1,9,"GEOL",35.3071285,-80.73022955],["McEniry","10:10 AM",11,1157,"METR, WRDS, GEOG, CHEM, CJUS",35.3071285,-80.73022955],["McEniry","10:45 AM",2,126,"SPED",35.3071285,-80.73022955],["McEniry","11:15 AM",29,1310,"METR, WRDS, POLS, MATH, GEOL, ANTH, CHEM, ESCI",35.3071285,-80.73022955],["McEniry","12:20 PM",16,954,"METR, WRDS, GEOG, MATH, GEOL, COMM, ESCI",35.3071285,-80.73022955],["McEniry","1:00 PM",7,122,"INFO, ESCI",35.3071285,-80.73022955],["McEniry","1:25 PM",10,153,"STAT, WRDS, ESCI",35.3071285,-80.73022955],["McEniry","2:30 PM",21,710,"METR, FILM, GEOL, ESCI, CHEM, CHNS",35.3071285,-80.73022955],["McEniry","4:00 PM",5,193,"METR, HLTH, ETME",35.3071285,-80.73022955],["McEniry","5:30 PM",6,24,"ESCI",35.3071285,-80.73022955],["McEniry","8:00 AM",6,179,"MATH, GEOL, ESCI",35.3071285,-80.73022955],["McEniry","9:05 AM",9,1062,"WRDS, MATH, CHEM, ESCI",35.3071285,-80.73022955],["Mebane Hall","10:00 AM",2,136,"ITIS",35.30757076,-80.73410058],["Mebane Hall","10:10 AM",24,520,"SPAN, NANO, JAPN, FREN, MAED, ARBC, CHNS",35.30757076,-80.73410058],["Mebane Hall","11:15 AM",33,781,"SPAN, UCOL, READ, JAPN, MATH, FREN, ARBC, CMET, CHNS",35.30757076,-80.73410058],["Mebane Hall","11:30 AM",3,294,"BIOL",35.30757076,-80.73410058],["Mebane Hall","12:20 PM",15,510,"SPAN, JAPN, MATH, FREN, EDUC, ELED, CMET, CHNS",35.30757076,-80.73410058],["Mebane Hall","1:00 PM",1,16,"EDUC",35.30757076,-80.73410058],["Mebane Hall","1:25 PM",14,340,"SPAN, TESL, JAPN, GERM, CHNS",35.30757076,-80.73410058],["Mebane Hall","2:30 PM",39,898,"SPAN, SPED, PHIL, STAT, SEGR, JAPN, MATH, HAHS, ELED, ENGR, AMST, ARBC, BIOL, CHEM, CSLG",35.30757076,-80.73410058],["Mebane Hall","4:00 PM",21,499,"SOCY, SPED, SEGR, HLTH, JAPN, FREN, ELED, ITCS",35.30757076,-80.73410058],["Mebane Hall","5:30 PM",17,324,"HLTH, HONR, MATH, RSCH, ADMN, CSLG",35.30757076,-80.73410058],["Mebane Hall","8:00 AM",4,68,"SPAN",35.30757076,-80.73410058],["Mebane Hall","8:30 AM",1,56,"ENGR",35.30757076,-80.73410058],["Mebane Hall","9:05 AM",13,524,"SPAN, SOCY, JAPN, FREN",35.30757076,-80.73410058],["Mebane Hall","9:30 AM",2,42,"UCOL",35.30757076,-80.73410058],["Mebane Hall","9:45 AM",3,207,"BIOL",35.30757076,-80.73410058],["Memorial Hall","1:00 PM",3,21,"AERO",35.30378281,-80.73585051],["Memorial Hall","1:25 PM",4,66,"MSCI",35.30378281,-80.73585051],["Memorial Hall","9:00 AM",6,75,"AERO",35.30378281,-80.73585051],["Robinson Hall","10:10 AM",13,140,"MUSC, THEA, DANC",35.30381108,-80.72993837],["Robinson Hall","11:15 AM",10,52,"MUSC, THEA",35.30381108,-80.72993837],["Robinson Hall","12:20 PM",11,268,"MUSC, THEA, DANC",35.30381108,-80.72993837],["Robinson Hall","1:00 PM",2,22,"THEA",35.30381108,-80.72993837],["Robinson Hall","1:25 PM",5,140,"MUSC, THEA, MATH",35.30381108,-80.72993837],["Robinson Hall","2:30 PM",12,370,"MUPF, THEA, ENGL, CJUS",35.30381108,-80.72993837],["Robinson Hall","4:00 PM",8,240,"MUSC, THEA, ENGL, DANC",35.30381108,-80.72993837],["Robinson Hall","5:30 PM",3,107,"THEA, FILM",35.30381108,-80.72993837],["Robinson Hall","7:00 PM",2,92,"MUPF",35.30381108,-80.72993837],["Robinson Hall","8:00 AM",2,26,"MUSC",35.30381108,-80.72993837],["Robinson Hall","9:05 AM",14,126,"MUSC, MUED, THEA",35.30381108,-80.72993837],["Rowe","10:10 AM",50,715,"PHIL, ARTA, ARTB, ARTC, ARTL, ARTT, COMM, DANC",35.3044754,-80.73072352],["Rowe","11:15 AM",8,152,"PHIL",35.3044754,-80.73072352],["Rowe","11:30 AM",1,100,"LTAM",35.3044754,-80.73072352],["Rowe","12:20 PM",11,136,"THEA, ARTA, ARTH, ARTZ",35.3044754,-80.73072352],["Rowe","1:25 PM",2,500,"ECON",35.3044754,-80.73072352],["Rowe","2:30 PM",37,1175,"MUPF, THEA, PSYC, FINN, ARTH, ARTB, ARTC, ARTM, ARTP, ARTT",35.3044754,-80.73072352],["Rowe","4:00 PM",2,38,"THEA",35.3044754,-80.73072352],["Rowe","4:15 PM",2,422,"MUPF",35.3044754,-80.73072352],["Rowe","5:30 PM",14,353,"THEA, ACCT, ARTC, ARTZ",35.3044754,-80.73072352],["Rowe","8:00 AM",9,90,"ARTA, ARTB, AAHP",35.3044754,-80.73072352],["Rowe","9:05 AM",14,272,"PHIL",35.3044754,-80.73072352],["Smith","10:10 AM",9,294,"MDSK, POLS, ETFS, MATH, ENGR, ETGR",35.30686752,-80.73146949],["Smith","10:30 AM",3,120,"BUSN",35.30686752,-80.73146949],["Smith","10:35 AM",2,56,"SOCY",35.30686752,-80.73146949],["Smith","11:15 AM",10,192,"ETFS, HAHS, ENGR, AEEE, ETCE",35.30686752,-80.73146949],["Smith","12:20 PM",5,218,"ETEM, ENGR, BIOL",35.30686752,-80.73146949],["Smith","1:25 PM",7,241,"MATH, ETEM, ENGR, ETGR, CMET",35.30686752,-80.73146949],["Smith","2:30 PM",41,719,"MEET, LTAM, MKTG, ETFS, FREN, GEOG, GLST, ETEM, ENGR, ENGL, ANTH, BIOL, ETCE, COSC, ITCS",35.30686752,-80.73146949],["Smith","3:35 PM",1,40,"ENGR",35.30686752,-80.73146949],["Smith","4:00 PM",10,351,"ITIS, MEET, ETCE, CMET",35.30686752,-80.73146949],["Smith","5:30 PM",8,159,"ETGR, ETCE, CMET",35.30686752,-80.73146949],["Smith","6:00 PM",6,69,"AEEE",35.30686752,-80.73146949],["Smith","8:00 AM",10,202,"ETME, MEET, ETEM, ENGR, EMGT, CHEM",35.30686752,-80.73146949],["Smith","9:00 AM",2,32,"ELTI, ETFS",35.30686752,-80.73146949],["Smith","9:05 AM",2,48,"ENGR, ETGR",35.30686752,-80.73146949],["Storrs","10:10 AM",2,160,"PSYC",35.30459394,-80.72911431],["Storrs","11:15 AM",1,100,"MATH",35.30459394,-80.72911431],["Storrs","1:00 PM",3,120,"ARCH",35.30459394,-80.72911431],["Storrs","2:30 PM",9,48,"ARCH",35.30459394,-80.72911431],["Storrs","4:00 PM",1,57,"ENGR",35.30459394,-80.72911431],["Storrs","6:30 PM",1,38,"MATH",35.30459394,-80.72911431],["Storrs","8:00 AM",3,234,"CMET",35.30459394,-80.72911431],["Storrs","9:05 AM",6,120,"CMET",35.30459394,-80.72911431],["Storrs","9:30 AM",28,135,"HIST, ANTH, ARCH",35.30459394,-80.72911431],["Winningham","10:10 AM",6,81,"ARTB, ARTL",35.30511747,-80.73041009],["Winningham","12:20 PM",7,47,"PHIL, PPOL, ARTA",35.30511747,-80.73041009],["Winningham","2:30 PM",15,168,"ARTE, ARTB, ARTL, COMM",35.30511747,-80.73041009],["Winningham","5:30 PM",2,18,"PHIL",35.30511747,-80.73041009],["Winningham","8:00 AM",3,48,"ARTD",35.30511747,-80.73041009],["Woodward Hall","10:00 AM",3,69,"BIOL",35.30728395,-80.73538119],["Woodward Hall","10:10 AM",23,1610,"SPOA, EXER, JAPN, BIOL, ITSC",35.30728395,-80.73538119],["Woodward Hall","11:15 AM",19,543,"SPOA, SEGR, EXER, JAPN, BIOL, ITCS",35.30728395,-80.73538119],["Woodward Hall","11:30 AM",6,141,"BIOL",35.30728395,-80.73538119],["Woodward Hall","12:20 PM",13,405,"ETGR, BIOL, ITCS, ITSC",35.30728395,-80.73538119],["Woodward Hall","1:25 PM",14,866,"HAHS, MEET, BIOL, ITCS, ITSC",35.30728395,-80.73538119],["Woodward Hall","2:30 PM",28,876,"ITIS, EXER, ITAI, BIOL, ITCS, ITSC",35.30728395,-80.73538119],["Woodward Hall","4:00 PM",21,891,"ITIS, ENGR, BIOL, ITCS, ITSC, CHNS",35.30728395,-80.73538119],["Woodward Hall","5:30 PM",14,719,"ITIS, ITAI, BIOL, ITSC",35.30728395,-80.73538119],["Woodward Hall","7:00 PM",6,318,"ITSC",35.30728395,-80.73538119],["Woodward Hall","8:00 AM",12,333,"BIOL, ITCS",35.30728395,-80.73538119],["Woodward Hall","8:30 AM",5,342,"PHYS, BIOL",35.30728395,-80.73538119],["Woodward Hall","9:00 AM",3,33,"ITSC",35.30728395,-80.73538119],["Woodward Hall","9:05 AM",17,598,"OPRS, SEGR, HAHS, BIOL, ITCS",35.30728395,-80.73538119]],"fields":[{"name":"Building","type":"string","format":"","analyzerType":"STRING"},{"name":"Start Time","type":"timestamp","format":"H:m","analyzerType":"TIME"},{"name":"Total_Courses","type":"integer","format":"","analyzerType":"INT"},{"name":"Actual_Enrolled_Students","type":"integer","format":"","analyzerType":"INT"},{"name":"Unique_Subjects","type":"string","format":"","analyzerType":"STRING"},{"name":"Latitude","type":"real","format":"","analyzerType":"FLOAT"},{"name":"Longitude","type":"real","format":"","analyzerType":"FLOAT"}],"type":"","metadata":{"id":"tp0jwc","format":"row","label":"courses_by_building_actual_enrolled_with_coords.csv","size":19082},"disableDataOperation":false}}];
+            const config = {"version":"v1","config":{"visState":{"filters":[{"dataId":["tp0jwc"],"id":"kr5ctmp4","name":["Start Time"],"type":"timeRange","value":[1792630500000,1792672500000],"plotType":{"interval":"5-minute","defaultTimeFormat":"L  LT","type":"histogram","aggregation":"average"},"animationWindow":"free","yAxis":null,"view":"minified","speed":1,"enabled":true,"timezone":"America/New_York"}],"layers":[{"id":"pgvykob","type":"hexagon","config":{"dataId":"tp0jwc","columnMode":"points","label":"courses_by_building_actual_enrolled_with_coords","color":[136,87,44],"highlightColor":[252,242,26,255],"columns":{"lat":"Latitude","lng":"Longitude"},"isVisible":true,"visConfig":{"opacity":0.69,"worldUnitSize":0.02,"resolution":8,"colorRange":{"name":"Global Warming","type":"sequential","category":"Uber","colors":["#4C0035","#880030","#B72F15","#D6610A","#EF9100","#FFC300"]},"coverage":1,"sizeRange":[0,500],"percentile":[0,100],"elevationPercentile":[0,100],"elevationScale":3,"enableElevationZoomFactor":true,"fixedHeight":false,"colorAggregation":"count","sizeAggregation":"count","enable3d":true},"hidden":false,"textLabel":[{"field":null,"color":[255,255,255],"size":18,"weight":400,"offset":[0,0],"anchor":"start","alignment":"center","outlineWidth":0,"outlineColor":[255,0,0,255],"background":false,"backgroundColor":[0,0,200,255],"collisionEnabled":false}]},"visualChannels":{"colorField":null,"colorScale":"quantile","sizeField":null,"sizeScale":"linear"}}],"effects":[],"annotations":[],"interactionConfig":{"tooltip":{"fieldsToShow":{"tp0jwc":[{"name":"Building","format":null},{"name":"Start Time","format":"L LTS"},{"name":"Total_Courses","format":null},{"name":"Actual_Enrolled_Students","format":null},{"name":"Unique_Subjects","format":null}]},"timezone":null,"compareMode":false,"compareType":"absolute","enabled":true},"legend":{"hideInvisibleLayers":false,"enabled":true},"brush":{"size":2.5,"enabled":false},"geocoder":{"limitSearch":false,"color":[255,0,0],"enabled":false},"coordinate":{"enabled":false},"annotation":{"enabled":false},"zoomOpacity":{"controllers":[],"enabled":false}},"layerBlending":"normal","overlayBlending":"normal","splitMaps":[],"animationConfig":{"currentTime":null,"speed":1,"timeFormat":null,"timezone":null},"editor":{"features":[],"visible":true},"layerOrder":["pgvykob"],"groupBys":[],"joins":[]},"mapState":{"bearing":24,"dragRotate":true,"latitude":35.306271942436396,"longitude":-80.73376816833418,"pitch":50,"zoom":14.256325621955193,"isSplit":false,"isViewportSynced":true,"isZoomLocked":false,"splitMapViewports":[],"maxPitch":60,"mapSplitMode":"SINGLE_MAP","swipeComparePercentage":50,"mapViewMode":"MODE_3D","globe":{"enabled":false,"config":{"atmosphere":true,"hugeHalo":true,"hugeHaloRadius":3.5,"hugeHaloOpacity":0.2,"azimuth":false,"azimuthAngle":45,"terminator":true,"terminatorOpacity":0.35,"basemap":true,"labels":false,"labelsColor":[114.75,114.75,114.75],"adminLines":true,"adminLinesColor":[40,63,93],"water":true,"waterColor":[17,35,48],"surface":true,"surfaceColor":[9,16,29],"backgroundColor":[4,9,17],"stars":true}}},"mapStyle":{"styleType":"voyager","topLayerGroups":{},"visibleLayerGroups":{"label":true,"road":true,"border":false,"building":true,"water":true,"land":true,"3d building":false},"threeDBuildingColor":[233.71862868880427,230.92517894351974,226.26942936804556],"backgroundColor":[0,0,0],"mapStyles":{}},"uiState":{"mapControls":{"mapLegend":{"active":true},"chart":{"active":false},"cameraBookmarks":{"show":false,"settings":{"position":{"x":60,"y":20,"anchorX":"right","anchorY":"top"},"contentHeight":-1}},"mapInfo":{"active":true,"show":true}},"locale":"en","theme":"dark"}}};
+            const info = null;
+
+            const loadedData = keplerGl.KeplerGlSchema.load(
+              datasets,
+              config
+            );
+
+            // The 500 ms delay is a historical workaround for a race where
+            // keplerGl re-initialises and overwrites config applied synchronously.
+            // The pre-seeded styleType above removes the basemap flash on first
+            // render; this dispatch still applies the full saved config (layers,
+            // viewport, layer groups, etc.) once the component has settled.
+            window.setTimeout(() => {
+              store.dispatch(
+                keplerGl.addDataToMap({
+                  datasets: loadedData.datasets,
+                  config: loadedData.config,
+                  info,
+                  options: {
+                    centerMap: false,
+                  },
+                })
+              );
+            }, 500);
+          }(KeplerGl, store))
+        </script>
+      </body>
+    </html>
+  
